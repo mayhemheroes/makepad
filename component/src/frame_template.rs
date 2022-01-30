@@ -1,9 +1,9 @@
 use {
-    makepad_render::*,
+    makepad_platform::*,
 };
 
 live_register!{
-    use makepad_render::shader::std::*;
+    use makepad_platform::shader::std::*;
     
     FrameTemplate: {{FrameTemplate}} {
         bg_quad: {
@@ -67,7 +67,7 @@ live_register!{
 pub struct FrameTemplate {
     bg_quad: DrawQuad,
     
-    #[default_state(default_state, unselected_state)]
+    #[state(default_state, unselected_state)]
     animator: Animator,
     
     default_state: Option<LivePtr>,
@@ -85,7 +85,7 @@ pub enum FrameTemplateAction {
 
 impl FrameTemplate {
     
-    pub fn draw(&mut self, cx: &mut Cx) {
+    pub fn draw(&mut self, cx: &mut Cx2d) {
         self.bg_quad.begin(cx, self.layout);
         self.bg_quad.end(cx);
     }

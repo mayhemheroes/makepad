@@ -1,5 +1,16 @@
 use {
+    std::{
+        path::PathBuf,
+    },
     crate::{
+        makepad_component::{
+            ComponentMap,
+        },
+        makepad_studio_component::{
+            tab_bar::TabId,
+            //        dock::PanelId,
+        },
+        makepad_platform::*,
         editor_state::{
             EditorState,
             DocumentId,
@@ -9,7 +20,19 @@ use {
             code_editor_impl::{
                 CodeEditorAction
             },
-            protocol::{Notification, Request, Response},
+        },
+        collab::{
+            collab_protocol::{
+                CollabNotification,
+                CollabRequest,
+                CollabResponse
+            },
+        },
+        builder::{
+            builder_protocol::{
+                BuilderMsgWrap,
+                BuilderMsg
+            }
         },
         design_editor::{
             live_editor::{
@@ -17,11 +40,7 @@ use {
             },
         }
     },
-    makepad_component::{
-        ComponentMap,
-        dock::PanelId,
-    },
-    makepad_component::makepad_render::*,
+
 };
 
 enum EditorView {
@@ -34,20 +53,20 @@ impl EditorView {
             Self::LiveEditor(e) => e.redraw(cx)
         }
     }
-
-    pub fn set_session_id(&mut self, session_id:Option<SessionId>) {
+    
+    pub fn set_session_id(&mut self, session_id: Option<SessionId>) {
         match self {
             Self::LiveEditor(e) => e.set_session_id(session_id)
         }
     }
     
-    pub fn session_id(&self)->Option<SessionId> {
+    pub fn session_id(&self) -> Option<SessionId> {
         match self {
             Self::LiveEditor(e) => e.session_id()
         }
     }
     
-    pub fn draw(&mut self, cx: &mut Cx, state: &EditorState) {
+    pub fn draw(&mut self, cx: &mut Cx2d, state: &EditorState) {
         match self {
             Self::LiveEditor(e) => e.draw(cx, state)
         }
@@ -58,13 +77,13 @@ impl EditorView {
             Self::LiveEditor(e) => e.apply(cx, apply_from, index, nodes)
         }
     }
-     
+    
     pub fn handle_event(
         &mut self,
         cx: &mut Cx,
         state: &mut EditorState,
         event: &mut Event,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
         dispatch_action: &mut dyn FnMut(&mut Cx, CodeEditorAction),
     ) {
         match self {
@@ -83,9 +102,9 @@ live_register!{
 
 
 #[derive(Clone, Debug, Default, Eq, Hash, Copy, PartialEq)]
-pub struct EditorViewId(pub PanelId);
-impl From<PanelId> for EditorViewId{
-    fn from(panel_id:PanelId)->Self{Self(panel_id)}
+pub struct EditorViewId(pub TabId);
+impl From<TabId> for EditorViewId {
+    fn from(id: TabId) -> Self {Self (id)}
 }
 
 #[derive(Live)]
@@ -95,9 +114,9 @@ pub struct Editors {
     live_editor: Option<LivePtr>,
 }
 
-impl LiveHook for Editors{
+impl LiveHook for Editors {
     fn after_apply(&mut self, cx: &mut Cx, apply_from: ApplyFrom, index: usize, nodes: &[LiveNode]) {
-        if let Some(index) = nodes.child_by_name(index, id!(live_editor)){
+        if let Some(index) = nodes.child_by_name(index, id!(live_editor)) {
             for editor_view in self.editor_views.values_mut() {
                 editor_view.apply(cx, apply_from, index, nodes);
             }
@@ -107,7 +126,7 @@ impl LiveHook for Editors{
 
 impl Editors {
     
-    pub fn draw(&mut self, cx: &mut Cx, state: &EditorState, view_id: EditorViewId) {
+    pub fn draw(&mut self, cx: &mut Cx2d, state: &EditorState, view_id: EditorViewId) {
         let view = &mut self.editor_views[view_id];
         view.draw(cx, state);
     }
@@ -124,9 +143,9 @@ impl Editors {
         view_id: EditorViewId,
         session_id: Option<SessionId>,
     ) {
-        let live_editor = self.live_editor.unwrap();
-        let view = self.editor_views.get_or_insert(cx, view_id.into(), |cx|{
-            EditorView::LiveEditor(LiveEditor::new_from_ptr(cx, live_editor))
+        let live_editor = self.live_editor;
+        let view = self.editor_views.get_or_insert(cx, view_id.into(), | cx | {
+            EditorView::LiveEditor(LiveEditor::new_from_option_ptr(cx, live_editor))
         });
         
         if let Some(session_id) = view.session_id() {
@@ -141,7 +160,7 @@ impl Editors {
         }
     }
     
-    pub fn has_editor(&self, view_id: EditorViewId)->bool{
+    pub fn has_editor(&self, view_id: EditorViewId) -> bool {
         self.editor_views.get(&view_id).is_some()
     }
     
@@ -156,7 +175,7 @@ impl Editors {
         state: &mut EditorState,
         view_id: EditorViewId,
         event: &mut Event,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let view = &mut self.editor_views[view_id];
         let mut actions = Vec::new();
@@ -166,26 +185,25 @@ impl Editors {
                 CodeEditorAction::RedrawViewsForDocument(document_id) => {
                     self.redraw_views_for_document(cx, state, document_id);
                 }
-                _=>()
+                _ => ()
             }
         }
     }
     
-    pub fn handle_response(
+    pub fn handle_collab_response(
         &mut self,
         cx: &mut Cx,
         state: &mut EditorState,
-        response: Response,
-        send_request: &mut dyn FnMut(Request),
+        response: CollabResponse,
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         match response {
-            Response::OpenFile(response) => {
+            CollabResponse::OpenFile(response) => {
                 let (file_id, revision, text) = response.unwrap();
-                let document_id =
-                state.handle_open_file_response(file_id, revision, text, send_request);
+                let document_id = state.handle_open_file_response(file_id, revision, text, send_request);
                 self.redraw_views_for_document(cx, state, document_id);
             }
-            Response::ApplyDelta(response) => {
+            CollabResponse::ApplyDelta(response) => {
                 let file_id = response.unwrap();
                 state.handle_apply_delta_response(file_id, send_request);
             }
@@ -193,17 +211,42 @@ impl Editors {
         }
     }
     
-    pub fn handle_notification(
+    pub fn handle_collab_notification(
         &mut self,
         cx: &mut Cx,
         state: &mut EditorState,
-        notification: Notification,
+        notification: CollabNotification,
     ) {
         match notification {
-            Notification::DeltaWasApplied(file_id, delta) => {
+            CollabNotification::DeltaWasApplied(file_id, delta) => {
                 let document_id = state.handle_delta_applied_notification(file_id, delta);
                 self.redraw_views_for_document(cx, state, document_id);
             }
+        }
+    }
+    
+    pub fn handle_builder_messages(
+        &mut self,
+        cx: &mut Cx,
+        state: &mut EditorState,
+        msgs: Vec<BuilderMsgWrap>,
+    ) {
+        for wrap in msgs {
+            let msg_id = state.messages.len();
+            match &wrap.msg {
+                BuilderMsg::Location(loc) => {
+                    if let Some(doc_id) = state.documents_by_path.get(&PathBuf::from(loc.file_name.clone())) {
+                        let doc = &mut state.documents[*doc_id];
+                        if let Some(inner) = &mut doc.inner {
+                            inner.msg_cache.add_range(&inner.text, msg_id, loc.range);
+                        }
+                        // lets redraw this doc. with new squigglies
+                        self.redraw_views_for_document(cx, state, *doc_id);
+                    }
+                }
+                _ => ()
+            }
+            state.messages.push(wrap.msg);
         }
     }
     
@@ -217,10 +260,9 @@ impl Editors {
         for session_id in &document.session_ids {
             let session = &state.sessions[*session_id];
             if let Some(view_id) = session.session_view {
-                let view = &mut self.editor_views[view_id];
+                let view = &mut self.editor_views[view_id]; 
                 view.redraw(cx);
             }
         }
     }
-    
 }

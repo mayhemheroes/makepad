@@ -1,4 +1,4 @@
-use makepad_render::*;
+use crate::makepad_platform::*;
 
 live_register!{
     BareWindow: {{BareWindow}} {
@@ -19,7 +19,7 @@ pub struct BareWindow {
 }
 
 impl BareWindow {
-    
+    /*
     pub fn begin(&mut self, cx: &mut Cx) -> ViewRedraw {
         
         if !self.main_view.view_will_redraw(cx) {
@@ -41,6 +41,6 @@ impl BareWindow {
         self.main_view.end(cx);
         self.pass.end(cx);
         self.window.end(cx);
-    }
+    }*/
 }
 

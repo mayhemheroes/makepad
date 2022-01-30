@@ -1,24 +1,36 @@
 use {
     crate::{
-        app_io::AppIO,
-        app_state::{TabKind, AppState, SplitPanel, TabPanel, Panel, Tab},
-        code_editor::{
-            protocol::{FileTreeData, Notification, Request, Response, ResponseOrNotification},
+        makepad_platform::*,
+        makepad_component::{
+            DesktopWindow,
         },
+        makepad_studio_component::{
+            dock::{Dock, DockAction, DragPosition, PanelId},
+            file_tree::{FileTreeAction, FileNodeId, FileTree},
+            splitter::{SplitterAlign},
+            tab_bar::TabId,
+        },
+        collab::{
+            collab_client::CollabClient,
+            collab_protocol::{
+                FileTreeData,
+                CollabRequest,
+                CollabResponse,
+                CollabClientAction
+            },
+        },
+        builder::{
+            builder_client::BuilderClient,
+            builder_protocol::{
+                BuilderCmd,
+            }
+        },
+        app_state::{TabKind, AppState, SplitPanel, TabPanel, Panel, Tab},
         log_view::{LogView},
         editors::{Editors},
     },
-    makepad_component::makepad_render::*,
-    makepad_component::{
-        DesktopWindow,
-        dock::{Dock, DockAction, DragPosition, PanelId},
-        file_tree::{FileTreeAction, FileNodeId, FileTree},
-        splitter::{SplitterAlign},
-        tab_bar::TabId,
-    },
     std::{
         path::{Path, PathBuf},
-        sync::mpsc::{TryRecvError},
     },
 };
 
@@ -36,13 +48,13 @@ pub struct AppInner {
     file_tree: FileTree,
     log_view: LogView,
     editors: Editors,
-    
-    #[rust(AppIO::new(cx))] io: AppIO
+    collab_client: CollabClient,
+    builder_client: BuilderClient
 }
 
 impl AppInner {
     
-    pub fn draw(&mut self, cx: &mut Cx, state: &AppState) {
+    pub fn draw(&mut self, cx: &mut Cx2d, state: &AppState) {
         if self.window.begin(cx, None).is_ok() {
             if self.dock.begin(cx).is_ok() {
                 self.draw_panel(cx, state, id!(root).into());
@@ -50,10 +62,9 @@ impl AppInner {
             }
             self.window.end(cx);
         }
-        //cx.redraw_all();
     }
     
-    fn draw_panel(&mut self, cx: &mut Cx, state: &AppState, panel_id: PanelId) {
+    fn draw_panel(&mut self, cx: &mut Cx2d, state: &AppState, panel_id: PanelId) {
         let panel = &state.panels[panel_id];
         match panel {
             Panel::Split(SplitPanel {child_panel_ids, axis, align}) => {
@@ -88,7 +99,7 @@ impl AppInner {
                             self.editors.draw(
                                 cx,
                                 &state.editor_state,
-                                panel_id.into(),
+                                tab_id.into(),
                             );
                         }
                     }
@@ -98,7 +109,7 @@ impl AppInner {
         }
     }
     
-    fn draw_file_node(&mut self, cx: &mut Cx, state: &AppState, file_node_id: FileNodeId) {
+    fn draw_file_node(&mut self, cx: &mut Cx2d, state: &AppState, file_node_id: FileNodeId) {
         let file_node = &state.file_nodes[file_node_id];
         match &file_node.child_edges {
             Some(child_edges) => {
@@ -119,20 +130,25 @@ impl AppInner {
     pub fn handle_event(&mut self, cx: &mut Cx, event: &mut Event, state: &mut AppState) {
         self.window.handle_event(cx, event);
         
-        if let Event::Construct = event {
-            self.send_request(Request::LoadFileTree());
-            self.create_code_editor_tab(
-                cx,
-                state,
-                id!(content).into(),
-                None,
-                state.file_path_join(&["component/src/file_tree.rs"])
-            );
+        match event {
+            Event::Construct => {
+                self.collab_client.send_request(CollabRequest::LoadFileTree {with_data: false});
+                self.create_code_editor_tab(
+                    cx,
+                    state,
+                    id!(content).into(),
+                    None,
+                    state.file_path_join(&["studio/component/src/file_tree.rs"])
+                );
+                self.builder_client.send_cmd(BuilderCmd::CargoCheck);
+            }
+            Event::Draw(draw_event) => {
+                self.draw(&mut Cx2d::new(cx, draw_event), state);
+            }
+            _ => ()
         }
         
-        let mut actions = Vec::new();
-        self.dock.handle_event(cx, event, &mut | _, action | actions.push(action));
-        for action in actions {
+        for action in self.dock.handle_event(cx, event) {
             match action {
                 DockAction::SplitPanelChanged {panel_id, axis, align} => {
                     if let Panel::Split(panel) = &mut state.panels[panel_id] {
@@ -160,17 +176,15 @@ impl AppInner {
                             self.editors.set_view_session_id(
                                 cx,
                                 &mut state.editor_state,
-                                panel_id.into(),
+                                tab_id.into(),
                                 None,
                             );
-                            state.editor_state.destroy_session(session_id, &mut {
-                                let request_sender = &self.io.request_sender;
-                                move | request | request_sender.send(request).unwrap()
-                            });
+                            
+                            state.editor_state.destroy_session(session_id, &mut self.collab_client.request_sender());
                             
                             panel.tab_ids.remove(panel.tab_position(tab_id));
                             state.tabs.remove(&tab_id);
-
+                            
                             self.dock.set_next_selected_tab(cx, panel_id, tab_id, Animate::Yes);
                             self.dock.redraw_tab_bar(cx, panel_id);
                         }
@@ -196,9 +210,7 @@ impl AppInner {
             }
         }
         
-        let mut actions = Vec::new();
-        self.file_tree.handle_event(cx, event, &mut | _cx, action | actions.push(action));
-        for action in actions {
+        for action in self.file_tree.handle_event(cx, event) {
             match action {
                 FileTreeAction::WasClicked(file_node_id) => {
                     let node = &state.file_nodes[file_node_id];
@@ -231,64 +243,49 @@ impl AppInner {
                         panel_id_stack.push(*child_id);
                     }
                 }
-                Panel::Tab(_) => {
-                    if self.editors.has_editor(panel_id.into()) {
-                        let request_sender = &self.io.request_sender;
-                        self.editors.handle_event(
-                            cx,
-                            &mut state.editor_state,
-                            panel_id.into(),
-                            event,
-                            &mut | request | request_sender.send(request).unwrap(),
-                        );
+                Panel::Tab(tab_panel) => {
+                    if let Some(tab_id) = tab_panel.selected_tab_id() {
+                        if self.editors.has_editor(tab_id.into()) {
+                            self.editors.handle_event(
+                                cx,
+                                &mut state.editor_state,
+                                tab_id.into(),
+                                event,
+                                &mut self.collab_client.request_sender(),
+                            );
+                        }
                     }
                 }
             }
         }
         
-        match event {
-            Event::Signal(event)
-            if event.signals.contains_key(&self.io.response_or_notification_signal) =>{
-                loop {
-                    match self.io.response_or_notification_receiver.try_recv() {
-                        Ok(ResponseOrNotification::Response(response)) => {
-                            self.handle_response(cx, state, response)
-                        }
-                        Ok(ResponseOrNotification::Notification(notification)) => {
-                            self.handle_notification(cx, state, notification)
-                        }
-                        Err(TryRecvError::Empty) => break,
-                        _ => panic!(),
+        for action in self.collab_client.handle_event(cx, event) {
+            match action {
+                CollabClientAction::Response(response) => match response {
+                    CollabResponse::LoadFileTree(response) => {
+                        self.load_file_tree(cx, state, response.unwrap());
+                        self.select_tab(cx, state, id!(file_tree).into(), id!(file_tree).into(), Animate::No);
                     }
+                    response => {
+                        self.editors.handle_collab_response(cx, &mut state.editor_state, response, &mut self.collab_client.request_sender())
+                    }
+                },
+                CollabClientAction::Notification(notification) => {
+                    self.editors.handle_collab_notification(cx, &mut state.editor_state, notification)
                 }
             }
-            _ => {}
         }
+        
+        let msgs = self.builder_client.handle_event(cx, event);
+        if msgs.len()>0 {
+            self.editors.handle_builder_messages(cx, &mut state.editor_state, msgs);
+            // lets redraw the logview
+            self.log_view.redraw(cx);
+        }
+        
+        self.log_view.handle_event_with_fn(cx, event,&mut |_,_|{});
     }
     
-    fn handle_response(&mut self, cx: &mut Cx, state: &mut AppState, response: Response) {
-        match response {
-            Response::LoadFileTree(response) => {
-                self.load_file_tree(cx, state, response.unwrap());
-                self.select_tab(cx, state, id!(file_tree).into(), id!(file_tree).into(), Animate::No);
-            }
-            response => {
-                self.editors.handle_response(cx, &mut state.editor_state, response, &mut {
-                    let request_sender = &self.io.request_sender;
-                    move | request | request_sender.send(request).unwrap()
-                })
-            }
-        };
-    }
-    
-    fn handle_notification(&mut self, cx: &mut Cx, state: &mut AppState, notification: Notification) {
-        match notification {
-            notification => {
-                self.editors
-                    .handle_notification(cx, &mut state.editor_state, notification)
-            }
-        }
-    }
     
     fn load_file_tree(&mut self, cx: &mut Cx, state: &mut AppState, file_tree_data: FileTreeData) {
         self.file_tree.forget();
@@ -351,10 +348,7 @@ impl AppInner {
     ) {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         
-        let session_id = state.editor_state.create_session(path, &mut {
-            let request_sender = &self.io.request_sender;
-            move | request | request_sender.send(request).unwrap()
-        });
+        let session_id = state.editor_state.create_session(path, &mut self.collab_client.request_sender());
         
         let tab_id = state.tabs.insert_unique(Tab {
             name,
@@ -383,16 +377,12 @@ impl AppInner {
                 self.editors.set_view_session_id(
                     cx,
                     &mut state.editor_state,
-                    panel_id.into(),
+                    tab_id.into(),
                     Some(session_id),
                 );
             }
             _ => {}
         }
-    }
-    
-    fn send_request(&mut self, request: Request) {
-        self.io.request_sender.send(request).unwrap();
     }
     
     fn redraw_panel(&mut self, cx: &mut Cx, state: &AppState, panel_id: PanelId) {
@@ -415,7 +405,7 @@ impl AppInner {
                             self.file_tree.redraw(cx);
                         }
                         TabKind::CodeEditor {..} => {
-                            self.editors.redraw_view(cx, panel_id.into());
+                            self.editors.redraw_view(cx, tab_id.into());
                         }
                     }
                 }

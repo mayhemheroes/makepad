@@ -1,5 +1,9 @@
-use makepad_render::*;
-use crate::frame_registry::*;
+use{
+    crate::{
+        makepad_platform::*,
+        frame_registry::*
+    }
+};
 
 #[derive(Default, Clone)]
 pub struct ButtonLogic {
@@ -9,7 +13,7 @@ impl Default for ButtonAction {
     fn default() -> Self {Self::None}
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Debug, Clone, PartialEq)]
 pub enum ButtonState {
     Hover,
     Default,

@@ -1,5 +1,18 @@
 use {
     crate::{
+        makepad_live_tokenizer::{
+            position::Position,
+            position_set::PositionSet,
+            range::Range,
+            range_set::{RangeSet, Span},
+            size::Size,
+            text::{Text},
+        },
+        makepad_platform::*,
+        makepad_component::{ 
+            ScrollView,
+            ScrollShadow
+        },
         editor_state::{
             EditorState,
             Document,
@@ -11,29 +24,21 @@ use {
         code_editor::{
             cursor::Cursor,
             indent_cache::IndentCache,
-            protocol::Request,
+            msg_cache::MsgCache
+            
         },
-    },
-    makepad_live_tokenizer::{
-        position::Position,
-        position_set::PositionSet,
-        range::Range,
-        range_set::{RangeSet, Span},
-        size::Size,
-        text::{Text},
-    },
-    makepad_component::makepad_render,
-    makepad_render::makepad_live_tokenizer,
-    makepad_render::*,
-    makepad_component::{
-        ScrollView,
-        ScrollShadow
+        builder::{
+            builder_protocol::{BuilderMsg, BuilderMsgLevel}
+        },
+        collab::{
+            collab_protocol::CollabRequest,
+        }
     },
     std::mem,
 };
 
 live_register!{
-    use makepad_render::shader::std::*;
+    use makepad_platform::shader::std::*;
     use makepad_component::theme::*;
     
     DrawSelection: {{DrawSelection}} {
@@ -64,42 +69,58 @@ live_register!{
                 sdf.box(self.next_x, self.rect_size.y, self.next_w, self.rect_size.y, BORDER_RADIUS);
                 sdf.gloop(GLOOPINESS);
             }
-            return sdf.fill(self.color);
+            return sdf.fill(COLOR_EDITOR_SELECTED);
         }
     }
     
-    DrawIndentLines: {{DrawIndentLines}} {
+    DrawIndentLine: {{DrawIndentLine}} {
         fn pixel(self) -> vec4 {
             //return #f00;
-            let col = self.color;
             let thickness = 0.8 + self.dpi_dilate * 0.5;
-            col *= vec4(0.75, 0.75, 0.75, 0.75);
             let sdf = Sdf2d::viewport(self.pos * self.rect_size);
             sdf.move_to(1., -1.);
             sdf.line_to(1., self.rect_size.y + 1.);
-            return sdf.stroke(col, thickness);
+            return sdf.stroke(COLOR_TEXT_META, thickness);
+        }
+    }
+    
+    DrawMsgLine: {{DrawMsgLine}} {
+        debug_id: my_id
+        const THICKNESS: 1.0
+        const WAVE_HEIGHT: 0.05
+        const WAVE_FREQ: 1.5
+        fn pixel(self) -> vec4 {
+            let offset_y = 1.5;
+            let pos2 = vec2(self.pos.x, self.pos.y + WAVE_HEIGHT * sin(WAVE_FREQ * self.pos.x * self.rect_size.x));
+            let sdf = Sdf2d::viewport(pos2 * self.rect_size);
+            sdf.move_to(0., self.rect_size.y - offset_y);
+            sdf.line_to(self.rect_size.x, self.rect_size.y - offset_y);
+            match self.level {
+                MsgLineLevel::Warning => {
+                    sdf.stroke(COLOR_WARNING, THICKNESS);
+                }
+                MsgLineLevel::Error => {
+                    sdf.stroke(COLOR_ERROR, THICKNESS);
+                }
+                MsgLineLevel::Log => {
+                    sdf.stroke(COLOR_TEXT_META, THICKNESS);
+                }
+            }
+            return sdf.result
         }
     }
     
     CodeEditorImpl: {{CodeEditorImpl}} {
         scroll_view: {
-            //v_scroll: {smoothing: 0.15},
+            v_scroll: {smoothing: 0.15},
             view: {
                 debug_id: code_editor_view
             }
         }
         
         code_text: {
-            //draw_depth: 1.0
-            text_style: {
-                font: {
-                    path: "resources/LiberationMono-Regular.ttf"
-                }
-                brightness: 1.1
-                font_size: 8.0
-                line_spacing: 1.8
-                top_drop: 1.3
-            }
+            //draw_depth: 1.0 
+            text_style: FONT_CODE{}
         }
         
         line_num_text: code_text {
@@ -108,7 +129,7 @@ live_register!{
         }
         
         line_num_quad: {
-            color: (COLOR_WINDOW_BG)
+            color: (COLOR_BG_EDITOR)
             //draw_depth: 4.0
             no_h_scroll: true
             no_v_scroll: true
@@ -121,25 +142,17 @@ live_register!{
         line_num_width: 45.0,
         padding_top: 30.0,
         
-        text_color_linenum: #88
-        text_color_linenum_current: #d4
-        text_color_indent_line: #808080
+        text_color_linenum: (COLOR_TEXT_META)
+        text_color_linenum_current: (COLOR_TEXT_DEFAULT)
+        text_color_indent_line:(COLOR_TEXT_DEFAULT)
         
-        selection_quad: {
-            color: #294e75
-        }
-        
-        indent_lines_quad: {
-            color: #fff
-        }
-        
-        caret_quad: {
-            color: #b0b0b0
+        caret_quad: { 
+            color: (COLOR_FG_CURSOR)
         }
         
         current_line_quad: {
             no_h_scroll: true
-            color: #6663
+            color: (COLOR_BG_CURSOR)
         }
         
         show_caret_state: {
@@ -160,7 +173,7 @@ live_register!{
             redraw: true
             apply: {zoom_out: [{time: 0.0, value: 1.0}, {time: 1.0, value: 0.0}]}
         }
-
+        
         zoom_out_state: {
             track: zoom
             from: {all: Play::Exp {speed1: 0.98, speed2: 0.95}}
@@ -198,7 +211,7 @@ pub struct CodeEditorImpl {
     zoom_out_state: Option<LivePtr>,
     zoom_in_state: Option<LivePtr>,
     
-    #[default_state(show_caret_state, zoom_in_state)]
+    #[state(show_caret_state, zoom_in_state)]
     animator: Animator,
     
     selection_quad: DrawSelection,
@@ -206,7 +219,8 @@ pub struct CodeEditorImpl {
     caret_quad: DrawColor,
     line_num_quad: DrawColor,
     line_num_text: DrawText,
-    indent_lines_quad: DrawIndentLines,
+    indent_line_quad: DrawIndentLine,
+    msg_line_quad: DrawMsgLine,
     
     text_color_linenum: Vec4,
     text_color_linenum_current: Vec4,
@@ -224,7 +238,7 @@ pub struct CodeEditorImpl {
 #[derive(Live, LiveHook)]
 #[repr(C)]
 pub struct DrawSelection {
-    deref_target: DrawColor,
+    deref_target: DrawQuad,
     prev_x: f32,
     prev_w: f32,
     next_x: f32,
@@ -233,9 +247,34 @@ pub struct DrawSelection {
 
 #[derive(Live, LiveHook)]
 #[repr(C)]
-pub struct DrawIndentLines {
-    deref_target: DrawColor,
+pub struct DrawIndentLine {
+    deref_target: DrawQuad, 
     indent_id: f32
+}
+
+#[derive(Live, LiveHook)]
+#[repr(u32)]
+pub enum MsgLineLevel {
+    Warning,
+    #[pick] Error,
+    Log,
+}
+
+impl From<BuilderMsgLevel> for MsgLineLevel {
+    fn from(other: BuilderMsgLevel) -> Self {
+        match other {
+            BuilderMsgLevel::Warning => Self::Warning,
+            BuilderMsgLevel::Error => Self::Error,
+            BuilderMsgLevel::Log => Self::Log
+        }
+    }
+}
+
+#[derive(Live, LiveHook)]
+#[repr(C)]
+pub struct DrawMsgLine {
+    deref_target: DrawQuad,
+    level: MsgLineLevel
 }
 
 pub enum CodeEditorAction {
@@ -249,7 +288,9 @@ impl CodeEditorImpl {
         self.scroll_view.redraw(cx);
     }
     
-    pub fn begin<'a>(&mut self, cx: &mut Cx, state: &'a EditorState) -> Result<(&'a Document, &'a DocumentInner, &'a Session), ()> {
+    pub fn begin<'a>(&mut self, cx: &mut Cx2d, state: &'a EditorState) -> Result<(&'a Document, &'a DocumentInner, &'a Session), ()> {
+        self.scroll_view.begin(cx) ?;
+        
         if let Some(session_id) = self.session_id {
             
             let session = &state.sessions[session_id];
@@ -257,17 +298,17 @@ impl CodeEditorImpl {
             
             if let Some(document_inner) = document.inner.as_ref() {
                 self.text_glyph_size = self.code_text.text_style.font_size * self.code_text.get_monospace_base(cx);
-                self.scroll_view.begin(cx) ?;
                 
                 self.handle_select_scroll_in_draw(cx);
                 self.begin_instances(cx);
                 return Ok((document, document_inner, session))
             }
         }
+        self.scroll_view.end(cx);
         Err(())
     }
     
-    pub fn end(&mut self, cx: &mut Cx, lines_layout: &LinesLayout) {
+    pub fn end(&mut self, cx: &mut Cx2d, lines_layout: &LinesLayout) {
         self.end_instances(cx);
         
         let visible = self.scroll_view.get_scroll_view_visible();
@@ -283,7 +324,7 @@ impl CodeEditorImpl {
     // lets calculate visible lines
     pub fn calc_lines_layout<T>(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         document_inner: &DocumentInner,
         lines_layout: &mut LinesLayout,
         mut compute_height: T,
@@ -307,7 +348,7 @@ impl CodeEditorImpl {
     // lets calculate visible lines
     fn calc_lines_layout_inner<T>(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         document_inner: &DocumentInner,
         lines_layout: &mut LinesLayout,
         compute_height: &mut T,
@@ -380,20 +421,23 @@ impl CodeEditorImpl {
         lines_layout.start_y = start_line_y.unwrap_or(0.0);
     }
     
-    pub fn begin_instances(&mut self, cx: &mut Cx) {
+    pub fn begin_instances(&mut self, cx: &mut Cx2d) {
         // this makes a single area pointer cover all the items drawn
         // also enables a faster draw api because it doesnt have to look up the instance buffer every time
         // since this also locks in draw-call-order, some draw apis call new_draw_call here
         self.selection_quad.begin_many_instances(cx);
         self.current_line_quad.new_draw_call(cx);
         self.code_text.begin_many_instances(cx);
-        self.indent_lines_quad.new_draw_call(cx);
+        self.indent_line_quad.begin_many_instances(cx);
+        self.msg_line_quad.begin_many_instances(cx);
         self.caret_quad.begin_many_instances(cx);
     }
     
-    pub fn end_instances(&mut self, cx: &mut Cx) {
+    pub fn end_instances(&mut self, cx: &mut Cx2d) {
         self.selection_quad.end_many_instances(cx);
         self.code_text.end_many_instances(cx);
+        self.indent_line_quad.end_many_instances(cx);
+        self.msg_line_quad.end_many_instances(cx);
         self.caret_quad.end_many_instances(cx);
     }
     
@@ -430,7 +474,7 @@ impl CodeEditorImpl {
     
     pub fn draw_selections(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         selections: &RangeSet,
         text: &Text,
         lines_layout: &LinesLayout,
@@ -449,7 +493,7 @@ impl CodeEditorImpl {
                         ..span.len
                     },
                     ..span
-                });
+                }); 
                 break;
             }
             line_count -= span.len.line;
@@ -576,7 +620,7 @@ impl CodeEditorImpl {
     
     pub fn draw_linenums(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         lines_layout: &LinesLayout,
         cursor: Cursor
     ) {
@@ -635,11 +679,11 @@ impl CodeEditorImpl {
                 y: layout.start_y + origin.y,
             }, 0, None);
         }
-    } 
+    }
     
     pub fn draw_indent_guides(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         indent_cache: &IndentCache,
         lines_layout: &LinesLayout,
     ) {
@@ -656,42 +700,57 @@ impl CodeEditorImpl {
             let indent_count = (indent_info.virtual_leading_whitespace() + 3) / 4;
             for indent in 0..indent_count {
                 let indent_lines_column = indent * 4;
-                self.indent_lines_quad.color = self.text_color_indent_line; // TODO: Colored indent guides
-                let rect = if indent_lines_column >= layout.zoom_column {
-                    Rect {
-                        pos: Vec2 {
-                            x: origin.x
-                                + self.line_num_width
-                                + indent_lines_column as f32 * self.text_glyph_size.x * layout.font_scale
-                                + layout.zoom_displace,
-                            y: layout.start_y + origin.y,
-                        },
-                        size: vec2(self.text_glyph_size.x * layout.font_scale, layout.total_height),
-                    }
-                }
-                else {
-                    Rect {
-                        pos: Vec2 {
-                            x: origin.x
-                                + self.line_num_width
-                                + indent_lines_column as f32 * self.text_glyph_size.x,
-                            y: layout.start_y + origin.y,
-                        },
-                        size: vec2(self.text_glyph_size.x, layout.total_height),
-                    }
-                    
-                };
-                self.indent_lines_quad.draw_abs(cx, rect);
+                //self.indent_line_quad.color = self.text_color_indent_line; // TODO: Colored indent guides
+                
+                let pos = self.position_to_vec2(Position {line: line_index, column: indent_lines_column}, lines_layout);
+                self.indent_line_quad.draw_abs(cx, Rect {
+                    pos: origin + pos,
+                    size: vec2(self.text_glyph_size.x * layout.font_scale, layout.total_height),
+                });
             }
-            
-            //start_y += line_height;
         }
     }
     
     
+    pub fn draw_message_lines(
+        &mut self,
+        cx: &mut Cx2d,
+        msg_cache: &MsgCache,
+        state: &EditorState,
+        lines_layout: &LinesLayout,
+    ) {
+        let origin = cx.get_turtle_pos();
+        //let mut start_y = lines_layout.start_y + origin.y;
+        for (line_index, spans) in msg_cache
+            .iter()
+            .skip(lines_layout.view_start)
+            .take(lines_layout.view_end - lines_layout.view_start)
+            .enumerate()
+        {
+            let line_index = line_index + lines_layout.view_start;
+            let layout = &lines_layout.lines[line_index];
+            for span in spans.spans() {
+                let start = self.position_to_vec2(Position {line: line_index, column: span.start_column}, lines_layout);
+                let end = self.position_to_vec2(Position {line: line_index, column: span.end_column}, lines_layout);
+                // letse draw it
+                let msg = &state.messages[span.msg_id];
+                match msg {
+                    BuilderMsg::Location(loc) => {
+                        self.msg_line_quad.level = MsgLineLevel::from(loc.level);
+                        self.msg_line_quad.draw_abs(cx, Rect {
+                            pos: origin + start,
+                            size: vec2(end.x - start.x, layout.total_height+1.0),
+                        });
+                    }
+                    _ => ()
+                }
+            }
+        }
+    }
+    
     pub fn draw_carets(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         selections: &RangeSet,
         carets: &PositionSet,
         lines_layout: &LinesLayout,
@@ -706,7 +765,6 @@ impl CodeEditorImpl {
             }
         }
         let origin = cx.get_turtle_pos();
-        let start_x = origin.x + self.line_num_width;
         //let mut start_y = lines_layout.start_y + origin.y;
         for line_index in lines_layout.view_start..lines_layout.view_end {
             let layout = &lines_layout.lines[line_index];
@@ -717,34 +775,15 @@ impl CodeEditorImpl {
                         if selections.contains_position(*caret) {
                             continue;
                         }
-                        
-                        let rect = if caret.column >= layout.zoom_column {
-                            Rect {
-                                pos: Vec2 {
-                                    x: start_x
-                                        + caret.column as f32 * self.text_glyph_size.x * layout.font_scale
-                                        + layout.zoom_displace,
-                                    y: layout.start_y + origin.y,
-                                },
-                                size: Vec2 {
-                                    x: 1.5 * layout.font_scale,
-                                    y: self.text_glyph_size.y * layout.font_scale,
-                                },
-                            }
-                        }
-                        else {
-                            Rect {
-                                pos: Vec2 {
-                                    x: start_x + caret.column as f32 * self.text_glyph_size.x,
-                                    y: layout.start_y + origin.y,
-                                },
-                                size: Vec2 {
-                                    x: 1.5,
-                                    y: self.text_glyph_size.y * layout.font_scale,
-                                },
-                            }
-                        };
-                        self.caret_quad.draw_abs(cx, rect);
+                        let pos = self.position_to_vec2(*caret, lines_layout);
+                        self.caret_quad.draw_abs(cx, Rect {
+                            pos: pos + origin,
+                            size: Vec2 {
+                                x: 1.5 * layout.font_scale,
+                                y: self.text_glyph_size.y * layout.font_scale,
+                            },
+                            
+                        });
                     }
                     _ => break,
                 }
@@ -754,7 +793,7 @@ impl CodeEditorImpl {
     
     pub fn draw_code_chunk(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         font_scale: f32,
         color: Vec4,
         pos: Vec2,
@@ -772,7 +811,7 @@ impl CodeEditorImpl {
     
     pub fn draw_current_line(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         lines_layout: &LinesLayout,
         cursor: Cursor,
     ) {
@@ -795,13 +834,13 @@ impl CodeEditorImpl {
         }
     }
     
-    pub fn handle_event(
+    pub fn handle_event_with_fn(
         &mut self,
         cx: &mut Cx,
         state: &mut EditorState,
         event: &mut Event,
         lines_layout: &LinesLayout,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
         dispatch_action: &mut dyn FnMut(&mut Cx, CodeEditorAction),
     ) {
         if self.animator_handle_event(cx, event).must_redraw() {
@@ -976,6 +1015,30 @@ impl CodeEditorImpl {
                     dispatch_action(cx, CodeEditorAction::RedrawViewsForDocument(session.document_id))
                 }
             }
+            HitEvent::KeyDown(KeyEvent {
+                key_code: KeyCode::KeyX,
+                modifiers,
+                ..
+            }) if modifiers.control || modifiers.logo => {
+                self.reset_caret_blink(cx);
+                if let Some(session_id) = self.session_id {
+                    state.delete(session_id, send_request);
+                    let session = &state.sessions[session_id];
+                    dispatch_action(cx, CodeEditorAction::RedrawViewsForDocument(session.document_id))
+                }
+            }
+            HitEvent::KeyDown(KeyEvent { 
+                key_code: KeyCode::KeyA,
+                modifiers,
+                ..
+            }) if modifiers.control || modifiers.logo => {
+                self.reset_caret_blink(cx);
+                if let Some(session_id) = self.session_id {
+                    state.select_all(session_id);
+                    self.scroll_view.redraw(cx);
+                }
+            }
+            
             HitEvent::TextCopy(ke) => {
                 if let Some(session_id) = self.session_id {
                     // TODO: The code below belongs in a function on EditorState
@@ -1100,8 +1163,8 @@ impl CodeEditorImpl {
             let pos = self.position_to_vec2(last_cursor.head, line_layout);
             
             let rect = Rect {
-                pos: pos + self.text_glyph_size * vec2(-2.0, -1.0) - vec2(self.line_num_width,0.),
-                size: self.text_glyph_size * vec2(4.0, 3.0) + vec2(self.line_num_width,0.)
+                pos: pos + self.text_glyph_size * vec2(-2.0, -1.0) - vec2(self.line_num_width, 0.),
+                size: self.text_glyph_size * vec2(4.0, 3.0) + vec2(self.line_num_width, 0.)
             };
             self.scroll_view.scroll_into_view(cx, rect);
         }
@@ -1111,11 +1174,10 @@ impl CodeEditorImpl {
     fn position_to_vec2(&self, position: Position, lines_layout: &LinesLayout) -> Vec2 {
         // we need to compute the position in the editor space
         let layout = &lines_layout.lines[position.line];
-        let x = if position.column >= layout.zoom_column{
-            let base = layout.zoom_column as f32 * self.text_glyph_size.x * layout.font_scale + self.line_num_width;
-            (position.column - layout.zoom_column) as f32 * self.text_glyph_size.x * layout.font_scale + base
+        let x = if position.column >= layout.zoom_column {
+            self.line_num_width + position.column as f32 * self.text_glyph_size.x * layout.font_scale + layout.zoom_displace
         }
-        else{
+        else {
             position.column as f32 * self.text_glyph_size.x + self.line_num_width
         };
         vec2(
@@ -1127,7 +1189,7 @@ impl CodeEditorImpl {
     fn vec2_to_position(&self, text: &Text, vec2: Vec2, lines_layout: &LinesLayout) -> Position {
         
         if vec2.y < self.padding_top {
-            return Position { 
+            return Position {
                 line: 0,
                 column: 0
             }
@@ -1136,11 +1198,11 @@ impl CodeEditorImpl {
             if vec2.y >= layout.start_y && vec2.y <= layout.start_y + layout.total_height {
                 let start_x = vec2.x - self.line_num_width;
                 let zoom_start = layout.zoom_column as f32 * self.text_glyph_size.x;
-                let column = if start_x >= zoom_start{
+                let column = if start_x >= zoom_start {
                     let scale_x = self.text_glyph_size.x * layout.font_scale;
                     ((start_x + 0.5 * scale_x - zoom_start) / scale_x) as usize + layout.zoom_column
                 }
-                else{
+                else {
                     ((start_x + 0.5 * self.text_glyph_size.x) / self.text_glyph_size.x) as usize
                 };
                 return Position {

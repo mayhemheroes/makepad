@@ -1,13 +1,26 @@
 use {
     crate::{
+        makepad_platform::*,
+        makepad_component::{
+            fold_button::{FoldButton, FoldButtonAction},
+            ComponentMap,
+        },
+        makepad_live_compiler::{LiveTokenId, LiveEditEvent},
+        makepad_live_tokenizer::{
+            full_token::{FullToken, Delim},
+            TokenWithLen,
+            text::{Text},
+        },
         editor_state::{
             EditorState,
             DocumentInner
         },
         code_editor::{
             token_cache::TokenCache,
-            protocol::Request,
             code_editor_impl::{CodeEditorImpl, CodeEditorAction, LinesLayout, LineLayoutOutput}
+        },
+        collab::{
+            collab_protocol::CollabRequest,
         },
         design_editor::{
             inline_widget::*,
@@ -17,24 +30,11 @@ use {
             SessionId
         },
     },
-    makepad_component::{
-        makepad_render, 
-        fold_button::{FoldButton, FoldButtonAction},
-        ComponentMap,
-    },
-    makepad_render::makepad_live_compiler,
-    makepad_live_compiler::makepad_live_tokenizer,
-    makepad_live_compiler::{LiveTokenId, LiveEditEvent},
-    makepad_live_tokenizer::{
-        full_token::{FullToken, Delim},
-        TokenWithLen,
-        text::{Text},
-    },
-    makepad_render::*,
+    
 };
 
 live_register!{
-    use makepad_render::shader::std::*;
+    use makepad_platform::shader::std::*;
     use makepad_component::fold_button::FoldButton;
     
     LiveEditor: {{LiveEditor}} {
@@ -44,9 +44,9 @@ live_register!{
             bg_quad: {no_h_scroll: true}
         }
         
-        widget_layout: Layout {
-            align: Align {fx: 0.2, fy: 0.},
-            padding: Padding {l: 0, t: .0, r: 0, b: 0}
+        widget_layout: {
+            align: {fx: 0.2, fy: 0},
+            padding: {left: 0, top: 0, right: 0, bottom: 0}
         }
         
         zoom_indent_depth: 8
@@ -143,7 +143,7 @@ impl LiveEditor {
         self.editor_impl.redraw(cx);
     }
     
-    pub fn draw_widgets(&mut self, cx: &mut Cx) {
+    pub fn draw_widgets(&mut self, cx: &mut Cx2d) {
         let live_registry_rc = cx.live_registry.clone();
         let live_registry = live_registry_rc.borrow();
         
@@ -184,7 +184,7 @@ impl LiveEditor {
         }
     }
     
-    pub fn draw_fold_buttons(&mut self, cx: &mut Cx, document_inner: &DocumentInner) {
+    pub fn draw_fold_buttons(&mut self, cx: &mut Cx2d, document_inner: &DocumentInner) {
         let mut last_line = None;
         let origin = cx.get_turtle_pos();
         
@@ -195,10 +195,10 @@ impl LiveEditor {
                 let layout = &self.lines_layout.lines[*line];
                 let line_opened = inline_cache[*line].line_opened;
                 let fold_button_id = inline_cache[*line].fold_button_id.unwrap();
-                let fold_button = self.fold_button.unwrap();
+                let fold_button = self.fold_button;
                 let fb = self.fold_buttons.get_or_insert(cx, fold_button_id, | cx | {
-                    let mut btn = FoldButton::new_from_ptr(cx, fold_button);
-                    btn.set_is_opened(cx, line_opened > 0.5, Animate::No);
+                    let mut btn = FoldButton::new_from_option_ptr(cx, fold_button);
+                    btn.set_is_open(cx, line_opened > 0.5, Animate::No);
                     btn
                 });
                 
@@ -209,7 +209,8 @@ impl LiveEditor {
         self.fold_buttons.retain_visible();
     }
     
-    pub fn calc_layout_with_widgets(&mut self, cx: &mut Cx, path: &str, document_inner: &DocumentInner) {
+    pub fn calc_layout_with_widgets(&mut self, cx: &mut Cx2d, path: &str, document_inner: &DocumentInner) {
+        
         let mut inline_cache = document_inner.inline_cache.borrow_mut();
         inline_cache.refresh(cx, path, &document_inner.token_cache);
         
@@ -235,6 +236,7 @@ impl LiveEditor {
             let mut max_height = 0.0f32;
             
             let ws = document_inner.indent_cache[input.line].virtual_leading_whitespace();
+            
             // ok so. we have to determine wether we are going to fold.
             // if a line starts with # or a comment: fold it
             let mut zoom_out = 0.0;
@@ -258,6 +260,7 @@ impl LiveEditor {
             }
             
             for bind in &edit_info.items {
+                
                 if let Some(matched) = widget_registry.match_inline_widget(&live_registry, *bind) {
                     let cache_line = &inline_cache.lines[input.line];
                     
@@ -288,7 +291,7 @@ impl LiveEditor {
         widgets.retain_visible();
     }
     
-    pub fn draw(&mut self, cx: &mut Cx, state: &EditorState) {
+    pub fn draw(&mut self, cx: &mut Cx2d, state: &EditorState) {
         if let Ok((document, document_inner, session)) = self.editor_impl.begin(cx, state) {
             let path = document.path.clone().into_os_string().into_string().unwrap();
             
@@ -332,6 +335,13 @@ impl LiveEditor {
                 *session.cursors.last_inserted()
             );
             
+            self.editor_impl.draw_message_lines(
+                cx,
+                &document_inner.msg_cache,
+                state,
+                &self.lines_layout,
+            );
+            
             self.draw_widgets(cx);
             
             self.editor_impl.draw_linenums(
@@ -348,7 +358,7 @@ impl LiveEditor {
     
     pub fn draw_text(
         &mut self,
-        cx: &mut Cx,
+        cx: &mut Cx2d,
         text: &Text,
         token_cache: &TokenCache,
     ) {
@@ -381,7 +391,7 @@ impl LiveEditor {
                     self.editor_impl.draw_code_chunk(
                         cx,
                         layout.font_scale,
-                        self.text_color(token.token, next_token.map( | next_token | next_token.token)),
+                        self.text_color(&chars[start..end], token.token, next_token.map( | next_token | next_token.token)),
                         Vec2 {x: start_x, y: layout.start_y + origin.y},
                         &chars[start..end]
                     );
@@ -435,7 +445,7 @@ impl LiveEditor {
         cx: &mut Cx,
         state: &mut EditorState,
         event: &mut Event,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
         dispatch_action: &mut dyn FnMut(&mut Cx, CodeEditorAction),
     ) {
         if self.editor_impl.scroll_view.handle_event(cx, event) {
@@ -443,7 +453,7 @@ impl LiveEditor {
         }
         
         let mut live_edit = false;
-        if self.editor_impl.session_id.is_none(){
+        if self.editor_impl.session_id.is_none() {
             return
         }
         let session_id = self.editor_impl.session_id.unwrap();
@@ -466,7 +476,7 @@ impl LiveEditor {
         
         let mut fold_actions = Vec::new();
         for (fold_button_id, fold_button) in self.fold_buttons.iter_mut() {
-            fold_button.handle_event(cx, event, &mut | _, action | fold_actions.push((action, *fold_button_id)));
+            fold_button.handle_event_with_fn(cx, event, &mut | _, action | fold_actions.push((action, *fold_button_id)));
         }
         for (action, fold_button_id) in fold_actions {
             match action {
@@ -486,42 +496,57 @@ impl LiveEditor {
         
         // what if the code editor changes something?
         let delayed_reparse_document = &mut self.delayed_reparse_document;
-        self.editor_impl.handle_event(cx, state, event, &self.lines_layout, send_request, &mut | cx, action | {
-            match action {
-                CodeEditorAction::RedrawViewsForDocument(_) => {
-                    live_edit = true;
-                }
-                CodeEditorAction::CursorBlink => {
-                    if delayed_reparse_document.is_some() {
-                        let live_registry_rc = cx.live_registry.clone();
-                        let mut live_registry = live_registry_rc.borrow_mut();
-                        let live_edit_event = delayed_reparse_document.take();
-                        match live_registry.process_next_originals_and_expand() {
-                            Err(errs) => {
-                                for e in errs {
-                                    let e = live_registry.live_error_to_live_file_error(e);
-                                    eprintln!("PARSE ERROR {}", e);
+        self.editor_impl.handle_event_with_fn(
+            cx,
+            state,
+            event,
+            &self.lines_layout,
+            send_request,
+            &mut | cx,
+            action | {
+                match action {
+                    CodeEditorAction::RedrawViewsForDocument(_) => {
+                        live_edit = true;
+                    }
+                    CodeEditorAction::CursorBlink => {
+                        if delayed_reparse_document.is_some() {
+                            let live_registry_rc = cx.live_registry.clone();
+                            let mut live_registry = live_registry_rc.borrow_mut();
+                            let live_edit_event = delayed_reparse_document.take();
+                            match live_registry.process_next_originals_and_expand() {
+                                Err(errs) => {
+                                    for e in errs {
+                                        let e = live_registry.live_error_to_live_file_error(e);
+                                        eprintln!("PARSE ERROR {}", e);
+                                    }
                                 }
-                            }
-                            Ok(()) => {
-                                cx.live_edit_event = live_edit_event
+                                Ok(()) => {
+                                    cx.live_edit_event = live_edit_event
+                                }
                             }
                         }
                     }
                 }
+                dispatch_action(cx, action);
             }
-            dispatch_action(cx, action);
-        });
+        );
         
         if live_edit {
             self.process_live_edit(cx, state, session_id);
         }
     }
     
-    fn text_color(&self, token: FullToken, next_token: Option<FullToken>) -> Vec4 {
+    fn text_color(&self, text: &[char], token: FullToken, next_token: Option<FullToken>) -> Vec4 {
         match (token, next_token) {
             (FullToken::Comment, _) => self.text_color_comment,
-            (FullToken::Ident(id), _) if id.is_capitalised() => self.text_color_type_name,
+            (FullToken::Ident(id), _) if id.is_capitalised() => {
+                if text.len() > 1 && text[1].is_uppercase() {
+                    self.text_color_string
+                }
+                else {
+                    self.text_color_type_name
+                }
+            },
             (FullToken::Ident(_), Some(FullToken::Open(Delim::Paren))) => self.text_color_function_identifier,
             (FullToken::Ident(_), Some(FullToken::Punct(id!(!)))) => self.text_color_macro_identifier,
             

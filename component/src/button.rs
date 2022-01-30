@@ -1,11 +1,29 @@
 #![allow(unused)]
-use makepad_render::*;
-use crate::button_logic::*;
-use crate::frame_registry::*;
-use crate::register_as_frame_component;
+use {
+    crate::{
+        makepad_platform::*,
+        button_logic::*,
+        frame_registry::*,
+        register_as_frame_component
+    }
+};
 
 live_register!{
-    use makepad_render::shader::std::*;
+    use makepad_platform::shader::std::*;
+    
+    DrawLabelText: {{DrawLabelText}} {
+        fn get_color(self) -> vec4 {
+            return mix(
+                mix(
+                    #9,
+                    #f,
+                    self.hover
+                ),
+                #9,
+                self.pressed
+            )
+        }
+    }
     
     Button: {{Button}} {
         bg_quad: {
@@ -22,7 +40,7 @@ live_register!{
                     SHADOW,
                     self.rect_size.x - SHADOW * (1. + self.pressed),
                     self.rect_size.y - SHADOW * (1. + self.pressed),
-                    BORDER_RADIUS 
+                    BORDER_RADIUS
                 );
                 sdf.blur = 6.0;
                 sdf.fill(mix(#0007, #0, self.hover));
@@ -38,21 +56,22 @@ live_register!{
             }
         }
         
-        layout: Layout {
-            align: Align {fx: 0.5, fy: 0.5},
-            walk: Walk {
+        
+        layout: {
+            align: {fx: 0.5, fy: 0.5},
+            walk: {
                 width: Width::Computed,
                 height: Height::Computed,
-                margin: Margin {l: 1.0, r: 1.0, t: 1.0, b: 1.0},
+                margin: {left: 1.0, right: 1.0, top: 1.0, bottom: 1.0},
             }
-            padding: Padding {l: 16.0, t: 12.0, r: 16.0, b: 12.0}
+            padding: {left: 16.0, top: 12.0, right: 16.0, bottom: 12.0}
         }
         
         default_state: {
             duration: 0.1,
-            apply:{
+            apply: {
                 bg_quad: {pressed: 0.0, hover: 0.0}
-                label_text: {color: #9}
+                label_text: {pressed: 0.0, hover: 0.0}
             }
         }
         
@@ -62,51 +81,58 @@ live_register!{
                 pressed_state: Play::Forward {duration: 0.01}
             }
             apply: {
-                bg_quad: {
-                    pressed: 0.0,
-                    hover: [{time: 0.0, value: 1.0}],
-                }
-                label_text: {color: [{time: 0.0, value: #f}]}
+                bg_quad: {pressed: 0.0, hover: [{time: 0.0, value: 1.0}],}
+                label_text: {pressed: 0.0, hover: [{time: 0.0, value: 1.0}],}
             }
         }
         
         pressed_state: {
             duration: 0.2,
             apply: {
-                bg_quad: {
-                    pressed: [{time: 0.0, value: 1.0}],
-                    hover: 1.0,
-                }
-                label_text: {color: [{time: 0.0, value: #c}]}
+                bg_quad: {pressed: [{time: 0.0, value: 1.0}], hover: 1.0,}
+                label_text: {pressed: [{time: 0.0, value: 1.0}], hover: 1.0,}
             }
         }
     }
 }
 
-#[derive(Live, LiveHook)]
-#[live_register(|cx:&mut Cx|{
+#[derive(Live)]
+#[live_register( | cx: &mut Cx | {
     register_as_frame_component!(cx, Button);
 })]
 pub struct Button {
     #[rust] pub button_logic: ButtonLogic,
-    #[default_state(default_state)] pub animator: Animator,
+    #[state(default_state)] pub animator: Animator,
     default_state: Option<LivePtr>,
     hover_state: Option<LivePtr>,
     pressed_state: Option<LivePtr>,
     bg_quad: DrawQuad,
-    label_text: DrawText,
+    label_text: DrawLabelText,
     layout: Layout,
     label: String
 }
 
+#[derive(Live, LiveHook)]#[repr(C)]
+struct DrawLabelText {
+    deref_target: DrawText,
+    hover: f32,
+    pressed: f32,
+}
+
+impl LiveHook for Button {
+    fn after_apply(&mut self, cx: &mut Cx, apply_from: ApplyFrom, index: usize, nodes: &[LiveNode]) {
+        //cx.debug_draw_tree(true, 0);
+    }
+}
+
 impl FrameComponent for Button {
-    fn type_id(&self)->LiveType{LiveType::of::<Self>()}
+    fn type_id(&self) -> LiveType {LiveType::of::<Self>()}
     
     fn handle_component_event(&mut self, cx: &mut Cx, event: &mut Event) -> OptionFrameComponentAction {
         self.handle_event(cx, event).into()
     }
     
-    fn draw_component(&mut self, cx: &mut Cx) {
+    fn draw_component(&mut self, cx: &mut Cx2d) {
         self.draw(cx, None);
     }
 }
@@ -127,7 +153,7 @@ impl Button {
         res.action
     }
     
-    pub fn draw(&mut self, cx: &mut Cx, label: Option<&str>) {
+    pub fn draw(&mut self, cx: &mut Cx2d, label: Option<&str>) {
         self.bg_quad.begin(cx, self.layout);
         self.label_text.draw_walk(cx, label.unwrap_or(&self.label));
         self.bg_quad.end(cx);

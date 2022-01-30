@@ -1,8 +1,12 @@
-use makepad_render::*;
-use crate::button_logic::*;
+use {
+    crate::{
+        makepad_platform::*,
+        button_logic::*
+    }
+};
 
 live_register!{
-    use makepad_render::shader::std::*;
+    use makepad_platform::shader::std::*;
     
     DrawDesktopButton: {{DrawDesktopButton}} {
         fn pixel(self) -> vec4 {
@@ -118,7 +122,7 @@ live_register!{
 #[derive(Live, LiveHook)]
 pub struct DesktopButton {
     #[rust] pub button_logic: ButtonLogic,
-    #[default_state(default_state)] pub animator: Animator,
+    #[state(default_state)] pub animator: Animator,
     pub default_state: Option<LivePtr>,
     pub hover_state: Option<LivePtr>,
     pub pressed_state: Option<LivePtr>,
@@ -150,6 +154,7 @@ impl DesktopButton {
     pub fn handle_desktop_button(&mut self, cx: &mut Cx, event: &mut Event) -> ButtonAction {
         self.animator_handle_event(cx, event);
         let res = self.button_logic.handle_event(cx, event, self.bg.draw_vars.area);
+        // println!("{:?}", res.state);
         match res.state {
             ButtonState::Pressed => self.animate_to(cx, self.pressed_state),
             ButtonState::Default => self.animate_to(cx, self.default_state),
@@ -159,7 +164,7 @@ impl DesktopButton {
         res.action
     }
     
-    pub fn draw_desktop_button(&mut self, cx: &mut Cx, ty: DesktopButtonType) {
+    pub fn draw_desktop_button(&mut self, cx: &mut Cx2d, ty: DesktopButtonType) {
         let (w, h) = match ty {
             DesktopButtonType::WindowsMin
                 | DesktopButtonType::WindowsMax

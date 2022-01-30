@@ -1,5 +1,5 @@
-use {
-    makepad_render::*,
+use crate::{
+    makepad_platform::*,
 };
 
 live_register!{

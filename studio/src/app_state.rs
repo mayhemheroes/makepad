@@ -1,17 +1,17 @@
 use {
     crate::{
+        makepad_studio_component::{
+            dock::{PanelId},
+            file_tree::{FileNodeId},
+            splitter::{SplitterAlign},
+            tab_bar::{TabId},
+        },
+        makepad_platform::*,
         editor_state::{EditorState, SessionId},
-        code_editor::{
-            protocol::{FileNodeData, FileTreeData},
+        collab::{
+            collab_protocol::{FileNodeData, FileTreeData},
         },
     },
-    makepad_component::{
-        dock::{PanelId},
-        file_tree::{FileNodeId},
-        splitter::{SplitterAlign},
-        tab_bar::{TabId},
-    },
-    makepad_component::makepad_render::*,
     std::{
         ffi::OsString,
         path::{ PathBuf},
@@ -56,7 +56,7 @@ impl AppState {
         tabs.insert(
             id!(log_view),
             Tab {
-                name: String::from("Log View"),
+                name: String::from("Log"),
                 kind: TabKind::LogView,
             },
         );
@@ -72,7 +72,7 @@ impl AppState {
         tabs.insert(
             id!(file_tree),
             Tab {
-                name: String::from("File Tree"),
+                name: String::from("Files"),
                 kind: TabKind::FileTree,
             },
         );
@@ -143,7 +143,7 @@ impl AppState {
             parent_edge: Option<FileEdge>,
             node: FileNodeData,
         ) -> FileNodeId {
-            let file_node_id = file_node_id.unwrap_or(file_nodes.unique_key());
+            let file_node_id = file_node_id.unwrap_or(file_nodes.alloc_key());
             let name = parent_edge.as_ref().map_or_else(
                 || String::from("root"),
                 | edge | edge.name.to_string_lossy().into_owned(),
@@ -169,7 +169,7 @@ impl AppState {
                         })
                             .collect::<Vec<_ >> (),
                     ),
-                    FileNodeData::File => None,
+                    FileNodeData::File{..} => None,
                 },
             };
             file_nodes.insert(file_node_id, node);
@@ -177,7 +177,9 @@ impl AppState {
         }
         
         self.path = tree_data.path;
+
         self.file_nodes.clear();
+
         create_file_node(
             Some(id!(root).into()),
             &mut self.file_nodes,
@@ -226,6 +228,15 @@ impl Panel {
 impl TabPanel{
     pub fn tab_position(&self, find_id:TabId)->usize{
         self.tab_ids.iter().position(|id| *id == find_id).unwrap()
+    }
+    
+    pub fn selected_tab_id(&self)->Option<TabId>{
+        if let Some(index) = self.selected_tab{
+            if index < self.tab_ids.len(){
+                return Some(self.tab_ids[index])
+            }
+        }
+        None
     }
 }
 

@@ -1,7 +1,7 @@
-use makepad_render::*;
+use crate::makepad_platform::*;
 
 live_register!{
-    use makepad_render::shader::std::*;
+    use makepad_platform::shader::std::*;
     use crate::theme::*;
     
     DrawScrollBar: {{DrawScrollBar}} {
@@ -34,8 +34,8 @@ live_register!{
             return sdf.fill(mix(
                 COLOR_SCROLL_BAR_DEFAULT,
                 mix(
-                    COLOR_SCROLL_BAR_HOVER,
-                    COLOR_SCROLL_BAR_PRESSED,
+                    COLOR_CONTROL_HOVER,
+                    COLOR_CONTROL_PRESSED,
                     self.pressed
                 ),
                 self.hover
@@ -94,7 +94,7 @@ pub struct ScrollBar {
     use_vertical_finger_scroll: bool,
     smoothing: Option<f32>,
     
-    #[default_state(default_state)] pub animator: Animator,
+    #[state(default_state)] pub animator: Animator,
     
     #[rust] next_frame: NextFrame,
     #[rust(false)] visible: bool,
@@ -337,7 +337,7 @@ impl ScrollBar {
         };
         if self.visible {
             self.animator_handle_event(cx, event);
-            if let Some(_) = event.is_next_frame(cx, self.next_frame) {
+            if let Some(_) = event.is_next_frame(self.next_frame) {
                 if self.move_towards_scroll_target(cx) {
                     self.next_frame = cx.new_next_frame();
                 }
@@ -416,7 +416,7 @@ impl ScrollBar {
         ScrollBarEvent::None
     }
     
-    pub fn draw_scroll_bar(&mut self, cx: &mut Cx, axis: Axis, view_area: Area, view_rect: Rect, view_total: Vec2) -> f32 {
+    pub fn draw_scroll_bar(&mut self, cx: &mut Cx2d, axis: Axis, view_area: Area, view_rect: Rect, view_total: Vec2) -> f32 {
         
         self.view_area = view_area;
         self.axis = axis;

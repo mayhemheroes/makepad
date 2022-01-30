@@ -1,17 +1,21 @@
 #![allow(unused)]
-use makepad_render::*;
-use crate::button_logic::*;
+use crate::{
+    makepad_platform::*,
+    button_logic::*
+};
 
 live_register!{
-    use makepad_render::shader::std::*;
+    use makepad_platform::shader::std::*;
     
     FoldButton: {{FoldButton}} {
         bg_quad: {
-            debug_id: fold_button,
             instance opened: 0.0
             instance hover: 0.0
-            uniform fade: 0.0
+
+            uniform fade: 1.0
+
             fn pixel(self) -> vec4 {
+              
                 let sz = 3.;
                 let c = vec2(5.0, 0.5 * self.rect_size.y);
                 let sdf = Sdf2d::viewport(self.pos * self.rect_size);
@@ -30,10 +34,9 @@ live_register!{
         abs_size: vec2(32, 12)
         abs_offset: vec2(4., 0.)
         
-        walk: Walk {
-            width: Width::Fixed(15),
+        walk: {
+            width: Width::Fixed(12),
             height: Height::Fixed(12),
-            margin: Margin {l: 1.0, r: 1.0, t: 1.0, b: 1.0},
         }
         
         default_state: {
@@ -85,7 +88,7 @@ live_register!{
 #[derive(Live, LiveHook)]
 pub struct FoldButton {
     #[rust] pub button_logic: ButtonLogic,
-    #[default_state(default_state, closed_state)] pub animator: Animator,
+    #[state(default_state, closed_state)] pub animator: Animator,
     
     default_state: Option<LivePtr>,
     hover_state: Option<LivePtr>,
@@ -109,7 +112,7 @@ pub enum FoldButtonAction {
 
 impl FoldButton {
     
-    pub fn handle_event(
+    pub fn handle_event_with_fn(
         &mut self,
         cx: &mut Cx,
         event: &mut Event,
@@ -124,7 +127,7 @@ impl FoldButton {
         
         match res.state {
             ButtonState::Pressed => {
-                if self.opened > 0.2 {
+                if self.animator_is_in_state(cx, self.opened_state) {
                     self.animate_to(cx, self.closed_state);
                     dispatch_action(cx, FoldButtonAction::Closing)
                 }
@@ -139,15 +142,15 @@ impl FoldButton {
         };
     }
     
-    pub fn set_is_opened(&mut self, cx: &mut Cx, is_opened: bool, animate: Animate) {
-        self.toggle_animator(cx, is_opened, animate, self.opened_state, self.closed_state)
+    pub fn set_is_open(&mut self, cx: &mut Cx, is_open: bool, animate: Animate) {
+        self.toggle_animator(cx, is_open, animate, self.opened_state, self.closed_state)
     }
     
-    pub fn draw(&mut self, cx: &mut Cx) {
+    pub fn draw(&mut self, cx: &mut Cx2d) {
         self.bg_quad.draw_walk(cx, self.walk);
     }
     
-    pub fn draw_abs(&mut self, cx: &mut Cx, pos: Vec2, fade: f32) {
+    pub fn draw_abs(&mut self, cx: &mut Cx2d, pos: Vec2, fade: f32) {
         self.bg_quad.apply_over(cx, live!{fade: (fade)});
         self.bg_quad.draw_abs(cx, Rect {
             pos: pos + self.abs_offset,

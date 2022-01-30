@@ -1,26 +1,27 @@
 use {
     crate::{
-        code_editor::{
-            cursor_set::CursorSet,
-            indent_cache::IndentCache,
-            protocol::{Request, TextFileId},
-            token_cache::TokenCache,
-        },
-        editors::EditorViewId,
-        design_editor::inline_cache::InlineCache,
-    },
-    makepad_component::makepad_render,
-    makepad_render::{
+        makepad_platform::*,
         makepad_live_tokenizer::{
             delta::{self, Delta},
             position::Position,
             position_set::PositionSet,
+            range::Range,
             range_set::RangeSet,
             size::Size,
             text::Text,
         },
-        *,
+        builder::builder_protocol::BuilderMsg,
+        code_editor::{
+            cursor_set::CursorSet,
+            indent_cache::IndentCache,
+            msg_cache::MsgCache,
+            token_cache::TokenCache,
+        },
+        collab::collab_protocol::{CollabRequest, TextFileId},
+        design_editor::inline_cache::InlineCache,
+        editors::EditorViewId,
     },
+    
     std::{
         cell::RefCell,
         collections::{HashMap, HashSet, VecDeque},
@@ -37,6 +38,7 @@ pub struct EditorState {
     pub documents_by_path: HashMap<PathBuf, DocumentId>,
     pub documents_by_file: LiveIdMap<TextFileId, DocumentId>,
     pub outstanding_document_queue: VecDeque<DocumentId>,
+    pub messages: Vec<BuilderMsg>,
 }
 
 impl EditorState {
@@ -47,7 +49,7 @@ impl EditorState {
     pub fn create_session(
         &mut self,
         path: PathBuf,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) -> SessionId {
         let document_id = self.get_or_create_document(path, send_request);
         let session_id = self.sessions.insert_unique(Session {
@@ -66,7 +68,7 @@ impl EditorState {
     pub fn destroy_session(
         &mut self,
         session_id: SessionId,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let session = &self.sessions[session_id];
         let document_id = session.document_id;
@@ -81,7 +83,7 @@ impl EditorState {
     pub fn get_or_create_document(
         &mut self,
         path: PathBuf,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) -> DocumentId {
         match self.documents_by_path.get(&path) {
             Some(document_id) => {
@@ -98,7 +100,7 @@ impl EditorState {
                 });
                 self.documents_by_path.insert(path.clone(), document_id);
                 self.outstanding_document_queue.push_back(document_id);
-                send_request(Request::OpenFile(path));
+                send_request(CollabRequest::OpenFile(path));
                 document_id
             }
         }
@@ -109,12 +111,14 @@ impl EditorState {
         file_id: TextFileId,
         revision: usize,
         text: Text,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) -> DocumentId {
         let document_id = self.outstanding_document_queue.pop_front().unwrap();
         let document = &mut self.documents[document_id];
         let token_cache = TokenCache::new(&text);
         let indent_cache = IndentCache::new(&text);
+        let msg_cache = MsgCache::new(&text);
+        
         let inline_cache = RefCell::new(InlineCache::new(&text));
         
         document.inner = Some(DocumentInner {
@@ -124,6 +128,7 @@ impl EditorState {
             token_cache,
             indent_cache,
             inline_cache,
+            msg_cache,
             edit_group: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -139,7 +144,7 @@ impl EditorState {
     pub fn destroy_document(
         &mut self,
         document_id: DocumentId,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let document = &mut self.documents[document_id];
         if document.inner.is_some() {
@@ -152,19 +157,29 @@ impl EditorState {
     fn destroy_document_deferred(
         &mut self,
         document_id: DocumentId,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let document = &mut self.documents[document_id];
         let inner = document.inner.as_ref().unwrap();
         let file_id = inner.file_id;
         self.documents_by_file.remove(&file_id);
+        self.documents_by_path.remove(&document.path);
         self.documents.remove(&document_id);
-        send_request(Request::CloseFile(file_id))
-    } 
+        send_request(CollabRequest::CloseFile(file_id))
+    }
     
     pub fn add_cursor(&mut self, session_id: SessionId, position: Position) {
         let session = &mut self.sessions[session_id];
         session.cursors.add(position);
+        session.update_selections_and_carets();
+        session.injected_char_stack.clear();
+    }
+    
+    pub fn select_all(&mut self, session_id: SessionId) {
+        let session = &mut self.sessions[session_id];
+        let document = &self.documents[session.document_id];
+        let document_inner = document.inner.as_ref().unwrap();
+        session.cursors.select_all(&document_inner.text);
         session.update_selections_and_carets();
         session.injected_char_stack.clear();
     }
@@ -217,7 +232,7 @@ impl EditorState {
         position: Position,
         size: Size,
         text: Text,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let session = &self.sessions[session_id];
         
@@ -239,7 +254,7 @@ impl EditorState {
         &mut self,
         session_id: SessionId,
         text: Text,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let session = &self.sessions[session_id];
         
@@ -309,7 +324,11 @@ impl EditorState {
         }
     }
     
-    pub fn insert_newline(&mut self, session_id: SessionId, send_request: &mut dyn FnMut(Request)) {
+    pub fn insert_newline(
+        &mut self,
+        session_id: SessionId,
+        send_request: &mut dyn FnMut(CollabRequest),
+    ) {
         let session = &self.sessions[session_id];
         let document = &self.documents[session.document_id];
         let document_inner = document.inner.as_ref().unwrap();
@@ -329,41 +348,43 @@ impl EditorState {
         let mut position = Position::origin();
         for cursor in &session.cursors {
             builder_1.retain(cursor.start() - position);
+            
+            let mut indent_count = 0;
+            
             // This is sort of a hack. I designed the multiple cursor system so that all
             // cursors are applied at once, but operations such autoindenting are much
             // easier to implement if you apply one cursor at a time. In the future I'd
             // like to refactor the editor to always apply one cursor at a time, but in the
             // meantime I'll work around this problem by only performing autoindenting if
             // there is just a single cursor.
-            let indent_count = if session.cursors.len() == 1 {
-                let indent_info = &document_inner.indent_cache[cursor.start().line];
-                let mut indent_count = (indent_info.virtual_leading_whitespace() + 3) / 4;
-                if indent_info.leading_whitespace().is_some() {
-                    if let Some(last_non_whitespace_char) = document_inner.text.as_lines()
-                        [..cursor.start().line]
-                        .iter()
-                        .flat_map(|line| line.iter().cloned())
-                        .chain(
-                            document_inner.text.as_lines()[cursor.start().line][..cursor.start().column]
-                                .iter()
-                                .cloned(),
-                        )
-                        .rev()
-                        .find(|ch| !ch.is_whitespace())
-                    {
-                        match last_non_whitespace_char {
-                            '(' | '[' | '{' => indent_count += 1,
-                            _ => {}
-                        }
+            if session.cursors.len() == 1 {
+                let lines = document_inner.text.as_lines();
+                if let Some((first_non_whitespace_line_before, first_non_whitespace_char_before)) =
+                lines[cursor.start().line][..cursor.start().column]
+                    .iter()
+                    .rev()
+                    .find( | ch | !ch.is_whitespace())
+                    .map( | &ch | (cursor.start().line, ch))
+                    .or_else( || {
+                    (0..cursor.start().line).rev().find_map( | line | {
+                        lines[line]
+                            .iter()
+                            .rev()
+                            .find( | ch | !ch.is_whitespace())
+                            .map( | &ch | (line, ch))
+                    })
+                })
+                {
+                    indent_count = (document_inner.indent_cache[first_non_whitespace_line_before] .leading_whitespace() .unwrap() + 3) / 4;
+                    match first_non_whitespace_char_before {
+                        '(' | '[' | '{' => indent_count += 1,
+                        _ => {}
                     }
-                };
-                indent_count
-            } else {
-                0
+                }
             };
             let text = Text::from(vec![
                 vec![],
-                iter::repeat(' ').take(indent_count * 4).collect::<Vec<_>>(),
+                iter::repeat(' ').take(indent_count * 4).collect::<Vec<_ >> (),
             ]);
             let len = text.len();
             builder_1.insert(text);
@@ -381,7 +402,7 @@ impl EditorState {
     pub fn insert_backspace(
         &mut self,
         session_id: SessionId,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let session = &self.sessions[session_id];
         let document = &self.documents[session.document_id];
@@ -455,7 +476,7 @@ impl EditorState {
                                     line: cursor.start().line - 1,
                                     column: document_inner.text.as_lines()[cursor.start().line - 1]
                                         .len(),
-                                } - position,
+                                } -position,
                             );
                             builder_1.delete(Size {
                                 line: 1,
@@ -498,7 +519,7 @@ impl EditorState {
         );
     }
     
-    pub fn delete(&mut self, session_id: SessionId, send_request: &mut dyn FnMut(Request)) {
+    pub fn delete(&mut self, session_id: SessionId, send_request: &mut dyn FnMut(CollabRequest)) {
         let session = &self.sessions[session_id];
         let document = &self.documents[session.document_id];
         let document_inner = document.inner.as_ref().unwrap();
@@ -552,7 +573,7 @@ impl EditorState {
         edit_group: Option<EditGroup>,
         delta: Delta,
         offsets: &[Size],
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let session = &self.sessions[session_id];
         let document = &mut self.documents[session.document_id];
@@ -588,7 +609,7 @@ impl EditorState {
         self.apply_delta(session_id, delta, send_request);
     }
     
-    pub fn undo(&mut self, session_id: SessionId, send_request: &mut dyn FnMut(Request)) {
+    pub fn undo(&mut self, session_id: SessionId, send_request: &mut dyn FnMut(CollabRequest)) {
         let session = &self.sessions[session_id];
         let document = &mut self.documents[session.document_id];
         let document_inner = document.inner.as_mut().unwrap();
@@ -610,7 +631,7 @@ impl EditorState {
         }
     }
     
-    pub fn redo(&mut self, session_id: SessionId, send_request: &mut dyn FnMut(Request)) {
+    pub fn redo(&mut self, session_id: SessionId, send_request: &mut dyn FnMut(CollabRequest)) {
         let session = &self.sessions[session_id];
         let document = &mut self.documents[session.document_id];
         let document_inner = document.inner.as_mut().unwrap();
@@ -636,7 +657,7 @@ impl EditorState {
         &mut self,
         session_id: SessionId,
         delta: Delta,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let session = &mut self.sessions[session_id];
         let document_id = session.document_id;
@@ -659,7 +680,7 @@ impl EditorState {
     pub fn handle_apply_delta_response(
         &mut self,
         file_id: TextFileId,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let document_id = self.documents_by_file[file_id];
         let document = &mut self.documents[document_id];
@@ -668,7 +689,7 @@ impl EditorState {
         document_inner.outstanding_deltas.pop_front();
         document_inner.revision += 1;
         if let Some(outstanding_delta) = document_inner.outstanding_deltas.front() {
-            send_request(Request::ApplyDelta(
+            send_request(CollabRequest::ApplyDelta(
                 file_id,
                 document_inner.revision,
                 outstanding_delta.clone(),
@@ -739,6 +760,11 @@ impl Session {
     }
 }
 
+pub struct BuilderMsgRange {
+    pub range: Range,
+    pub index: usize,
+}
+
 #[derive(Clone, Debug, Default, Eq, Hash, Copy, PartialEq, FromLiveId)]
 pub struct DocumentId(pub LiveId);
 
@@ -746,16 +772,21 @@ pub struct Document {
     pub session_ids: HashSet<SessionId>,
     pub should_be_destroyed: bool,
     pub path: PathBuf,
+    //pub msg_ranges: Vec<BuilderMsgRange>,
     pub inner: Option<DocumentInner>,
 }
 
 impl Document {
     fn apply_delta(&mut self, delta: Delta) {
         let inner = self.inner.as_mut().unwrap();
+        
         inner.token_cache.invalidate(&delta);
         inner.indent_cache.invalidate(&delta);
+        inner.msg_cache.invalidate(&delta);
         inner.inline_cache.borrow_mut().invalidate(&delta);
+        
         inner.text.apply_delta(delta);
+        
         inner.token_cache.refresh(&inner.text);
         inner.indent_cache.refresh(&inner.text);
     }
@@ -763,7 +794,7 @@ impl Document {
     fn schedule_apply_delta_request(
         &mut self,
         delta: Delta,
-        send_request: &mut dyn FnMut(Request),
+        send_request: &mut dyn FnMut(CollabRequest),
     ) {
         let inner = self.inner.as_mut().unwrap();
         if inner.outstanding_deltas.len() == 2 {
@@ -774,7 +805,7 @@ impl Document {
         } else {
             inner.outstanding_deltas.push_back(delta.clone());
             if inner.outstanding_deltas.len() == 1 {
-                send_request(Request::ApplyDelta(
+                send_request(CollabRequest::ApplyDelta(
                     inner.file_id,
                     inner.revision,
                     inner.outstanding_deltas.front().unwrap().clone(),
@@ -790,6 +821,7 @@ pub struct DocumentInner {
     pub text: Text,
     pub token_cache: TokenCache,
     pub indent_cache: IndentCache,
+    pub msg_cache: MsgCache,
     pub inline_cache: RefCell<InlineCache>,
     pub edit_group: Option<EditGroup>,
     pub undo_stack: Vec<Edit>,

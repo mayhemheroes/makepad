@@ -1,6 +1,10 @@
-use makepad_render::*;
-use crate::frame_registry::*;
-use std::collections::HashMap;
+use {
+    std::collections::HashMap,
+    crate::{
+        makepad_platform::*,
+        frame_registry::*
+    }
+};
 
 live_register!{
     Frame: {{Frame}} {
@@ -48,7 +52,7 @@ impl LiveApply for Frame {
     fn apply(&mut self, cx: &mut Cx, apply_from: ApplyFrom, start_index: usize, nodes: &[LiveNode]) -> usize {
         
         if let Some(file_id) = apply_from.file_id() {
-            self.live_ptr = Some(LivePtr::from_index(file_id, start_index));
+            self.live_ptr = Some(LivePtr::from_index(file_id, start_index, cx.live_registry.borrow().file_id_to_file(file_id).generation));
         }
         
         if !nodes[start_index].value.is_structy_type() {
@@ -156,7 +160,7 @@ impl FrameComponent for Frame {
         self.handle_event(cx, event).into()
     }
     
-    fn draw_component(&mut self, cx: &mut Cx) {
+    fn draw_component(&mut self, cx: &mut Cx2d) {
         self.draw(cx);
     }
 }
@@ -194,7 +198,7 @@ impl Frame {
         }
     }
     
-    pub fn draw(&mut self, cx: &mut Cx) {
+    pub fn draw(&mut self, cx: &mut Cx2d) {
         for id in if self.has_children_array {&self.children}else {&self.create_order} {
             let component = self.components.get_mut(id).unwrap();
             component.draw_component(cx)

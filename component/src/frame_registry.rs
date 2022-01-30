@@ -1,5 +1,7 @@
-use makepad_render::*;
-use std::any::TypeId;
+use {
+    std::any::TypeId,
+    crate::makepad_platform::*
+};
 
 live_register!{
     FrameComponentRegistry: {{FrameComponentRegistry}} {}
@@ -15,8 +17,8 @@ pub trait FrameComponentFactory {
 
 pub trait FrameComponent: LiveApply {
     fn handle_component_event(&mut self, cx: &mut Cx, event: &mut Event) -> Option<Box<dyn FrameComponentAction >>;
-    fn draw_component(&mut self, cx: &mut Cx);
-    fn apply_draw(&mut self, cx: &mut Cx, nodes: &[LiveNode]) {
+    fn draw_component(&mut self, cx: &mut Cx2d);
+    fn apply_draw(&mut self, cx: &mut Cx2d, nodes: &[LiveNode]) {
         self.apply_over(cx, nodes);
         self.draw_component(cx);
     }
