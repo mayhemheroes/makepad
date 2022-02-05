@@ -11,8 +11,6 @@ use {
     }
 };
 
-
-
 pub fn nsstring_to_string(string: ObjcId) -> String {
     unsafe {
         let utf8_string: *const std::os::raw::c_uchar = msg_send![string, UTF8String];
@@ -180,7 +178,7 @@ pub fn get_event_keycode(event: ObjcId) -> Option<KeyCode> {
         0x24 => KeyCode::Return,
         0x25 => KeyCode::KeyL,
         0x26 => KeyCode::KeyJ,
-        0x27 => KeyCode::Backtick,
+        0x27 => KeyCode::Quote,
         0x28 => KeyCode::KeyK,
         0x29 => KeyCode::Semicolon,
         0x2a => KeyCode::Backslash,

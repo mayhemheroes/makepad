@@ -77,7 +77,9 @@ extern {
 extern {
     pub static NSRunLoopCommonModes: ObjcId;
     pub static NSDefaultRunLoopMode: ObjcId;
-
+    pub static NSProcessInfo: ObjcId;
+    pub fn NSStringFromClass(class:ObjcId)->ObjcId;
+    
     pub fn __CFStringMakeConstantString(cStr: *const ::std::os::raw::c_char) -> CFStringRef;
     
     pub fn CFStringGetLength(theString: CFStringRef) -> u64;
@@ -94,6 +96,14 @@ extern {
 
 }
 
+#[link(name = "ImageIO", kind = "framework")]
+extern{
+    pub static kUTTypePNG:ObjcId;
+    pub fn CGImageDestinationCreateWithURL(url:ObjcId, ty:ObjcId, count:u64, options:ObjcId)->ObjcId;    
+    pub fn CGImageDestinationAddImage(dest:ObjcId, img:ObjcId, props:ObjcId);    
+    pub fn CGImageDestinationFinalize(dest:ObjcId)->bool;    
+}
+
 #[link(name = "AppKit", kind = "framework")]
 extern {
     pub static NSPasteboardURLReadingFileURLsOnlyKey: ObjcId;
@@ -102,8 +112,28 @@ extern {
     pub static NSPasteboardTypeFileURL: ObjcId;
 }
 
+#[link(name = "Vision", kind = "framework")]
+extern {
+    pub static VNImageRequestHandler: ObjcId;
+    pub static VNRecognizeTextRequest: ObjcId;
+}
+
+
+pub const kCGEventLeftMouseDown:u32 = 1;
+pub const kCGEventLeftMouseUp:u32 = 2;
+pub const kCGMouseEventClickState: u32 = 1;
+//pub const kCGEventSourceStateHIDSystemState: u32 = 1;
+
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
+    pub fn CGEventSourceCreate(state_id:u32)->ObjcId;
+    pub fn CGEventSetIntegerValueField(event:ObjcId, field: u32, value:u64);
+    pub fn CGEventCreateMouseEvent(source:ObjcId, mouse_type: u32, pos:NSPoint, button:u32)->ObjcId;
+    pub fn CGEventCreateScrollWheelEvent(source:ObjcId, is_line:u32, wheel_count: u32, wheel1: i32, wheel2: i32, wheel3: i32)->ObjcId;
+    pub fn CGEventPostToPid(pid:u32, event:ObjcId);
+    pub fn CGEventPost(tap:u32, event:ObjcId);
+    
+    pub fn CGWindowListCreateImage(rect:NSRect, options:u32, window_id:u32, imageoptions:u32 )->ObjcId;
     pub fn CGMainDisplayID() -> u32;
     pub fn CGDisplayPixelsHigh(display: u32) -> u64;
     pub fn CGColorCreateGenericRGB(red: f64, green: f64, blue: f64, alpha: f64) -> ObjcId;
@@ -135,7 +165,8 @@ pub struct CFRange {
 }
 
 pub const kCFStringEncodingUTF8: u32 = 134217984;
-
+pub const kCGWindowListOptionIncludingWindow: u32 = 1<<3;
+pub const kCGWindowImageBoundsIgnoreFraming: u32 = 1<<0;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -152,7 +183,7 @@ unsafe impl Encode for NSPoint {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Debug, Clone)]
 pub struct NSSize {
     pub width: f64,
     pub height: f64,
@@ -167,7 +198,7 @@ unsafe impl Encode for NSSize {
 
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Debug, Clone)]
 pub struct NSRect {
     pub origin: NSPoint,
     pub size: NSSize,
