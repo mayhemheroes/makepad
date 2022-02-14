@@ -9,7 +9,7 @@ mod live_prims;
 mod cx;
 mod cx_api;
 mod cx_thread;
-mod cx_registries;
+//mod cx_registries;
 mod cx_draw_shaders;
 
 pub mod live_traits;
@@ -31,6 +31,8 @@ mod draw_2d;
 mod draw_3d;
 mod draw_list;
 mod shader;
+pub mod audio;
+pub mod midi;
 
 pub use {
     makepad_shader_compiler,
@@ -55,11 +57,14 @@ pub use {
         LiveIdMap,
         LiveFileId,
         LivePtr,
+        LiveRef,
         LiveNode,
         LiveType,
         LiveTypeInfo,
         LiveTypeField,
         LiveFieldKind,
+        LiveComponentInfo,
+        LiveComponentRegistry,
         //LiveTypeKind,
         LiveValue,
         FittedString,
@@ -80,10 +85,10 @@ pub use {
             profile_start,
             profile_end
         },
-        cx_registries::{
+        /*cx_registries::{
             CxRegistries,
             CxRegistryNew,
-        },
+        },*/
         cx_draw_shaders::{
         },
         cx::{

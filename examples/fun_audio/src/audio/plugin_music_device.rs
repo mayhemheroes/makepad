@@ -1,14 +1,8 @@
 #![allow(unused_variables)]
 use {
     crate::{
-        register_as_audio_component,
-        audio_registry::*,
-        audio_graph::*,
-        makepad_platform::*,
-        makepad_platform::platform::apple::{
-            audio_unit::*,
-            core_midi::*,
-        },
+        audio::*,
+        makepad_platform::{*,audio::*, midi::*}
     },
 };
 
@@ -27,13 +21,12 @@ enum FromUI {
 }
 
 #[derive(Live)]
-#[live_register( | cx: &mut Cx | {register_as_audio_component!(cx, PluginMusicDevice)})]
+#[live_register(audio_component_factory!(PluginMusicDevice))]
 struct PluginMusicDevice {
     plugin:String,
     preset_data:String,
-
     #[rust] audio_device: Option<AudioDevice>,
-    #[rust(FromUISender::new())] from_ui: FromUISender<FromUI>,
+    #[rust] from_ui: FromUISender<FromUI>,
     #[rust(ToUIReceiver::new(cx))] to_ui: ToUIReceiver<ToUI>,
 }
 
@@ -49,7 +42,7 @@ impl AudioGraphNode for Node{
         }
     }
     
-    fn render_to_audio_buffer(&mut self, buffer: &mut AudioBuffer){
+    fn render_to_audio_buffer(&mut self, time: AudioTime, outputs: &mut [&mut AudioBuffer], inputs: &[&AudioBuffer]){
         while let Ok(msg) = self.from_ui.try_recv(){
             match msg{
                 FromUI::NewDevice(device)=>{
@@ -58,7 +51,7 @@ impl AudioGraphNode for Node{
             }
         }
         if let Some(audio_device) = &self.audio_device{
-            audio_device.render_to_audio_buffer(buffer);
+            audio_device.render_to_audio_buffer(time, outputs, inputs);
         }
     }
 }
@@ -72,10 +65,10 @@ impl LiveHook for PluginMusicDevice {
 impl PluginMusicDevice{
     fn load_audio_device(&mut self){
         // alright lets create an audio device 
-        let list = Audio::query_devices(AudioDeviceType::MusicDevice);
+        let list = AudioFactory::query_devices(AudioDeviceType::MusicDevice);
         let sender = self.to_ui.sender();
         if let Some(info) = list.iter().find( | item | item.name == self.plugin) {
-            Audio::new_device(info, move | result | {
+            AudioFactory::new_device(info, move | result | {
                 match result {
                     Ok(device) => {
                         sender.send(ToUI::NewDevice(device)).unwrap()
@@ -83,13 +76,17 @@ impl PluginMusicDevice{
                     Err(err) => println!("Error {:?}", err)
                 }
             })
-        }        
+        }
+        else{
+            println!("Cannot find music device {}", self.plugin);
+            for item in &list{
+                println!("MusicDevices: {}", item.name);
+            }
+        }
     }
 }
 
 impl AudioComponent for PluginMusicDevice {
-    fn type_id(&self) -> LiveType {LiveType::of::<Self>()}
-
     fn get_graph_node(&mut self) -> Box<dyn AudioGraphNode + Send>{
         self.from_ui.new_channel();
         Box::new(Node{

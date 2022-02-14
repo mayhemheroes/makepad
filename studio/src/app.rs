@@ -3,19 +3,18 @@ use {
         makepad_platform::*,
         app_inner::AppInner,
         app_state::AppState,
-        design_editor::{
-            inline_widget::InlineWidgetRegistry
-        }
     },
 };
 
 live_register!{
+    use makepad_component::theme::*;
     App: {{App}} {
         const FS_ROOT: ""
         inner: {
+            window: {pass: {clear_color: (COLOR_BG_EDITOR)}}
             collab_client: {
                 //bind: "127.0.0.1"
-                path: (FS_ROOT) 
+                path: (FS_ROOT)
             }
             builder_client: {
                 //bind: "127.0.0.1"
@@ -28,7 +27,6 @@ live_register!{
 #[derive(Live, LiveHook)]
 pub struct App {
     inner: AppInner,
-    inline_widget_registry: InlineWidgetRegistry,
     #[rust(AppState::new())] state: AppState,
 }
 

@@ -2,7 +2,7 @@ use {
     std::collections::HashMap,
     crate::{
         makepad_platform::*,
-        frame_registry::*
+        frame_component::*
     }
 };
 
@@ -155,7 +155,7 @@ impl LiveApply for Frame {
 }
 
 impl FrameComponent for Frame {
-    fn type_id(&self)->LiveType{LiveType::of::<Self>()}
+    fn type_id(&self) -> LiveType where Self:'static {LiveType::of::<Self>()}
     fn handle_component_event(&mut self, cx: &mut Cx, event: &mut Event) -> OptionFrameComponentAction {
         self.handle_event(cx, event).into()
     }
@@ -168,7 +168,7 @@ impl FrameComponent for Frame {
 impl Frame {
     
     fn new_component(&mut self, cx: &mut Cx, apply_from: ApplyFrom, id: LiveId, live_type: LiveType, index: usize, nodes: &[LiveNode]) {
-        if let Some(mut component) = cx.registries.clone().get::<CxFrameComponentRegistry>().new(cx, live_type) {
+        if let Some(mut component) = cx.live_registry.clone().borrow().components.get::<FrameComponentRegistry>().new(cx, live_type) {
             component.apply(cx, apply_from, index, nodes);
             self.components.insert(id, component);
         }
