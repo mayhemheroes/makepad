@@ -1,0 +1,7 @@
+project: makepad
+target: parse-ttf
+
+cmds:
+  - cmd: /parse_ttf
+  - cmd: /parse_ttf_no_inst @@
+    libfuzzer: false

@@ -511,6 +511,9 @@ pub type Result<T> = result::Result<T, Error>;
 pub struct Error;
 
 pub fn parse_ttf(bytes: &[u8]) -> Result<TTFFont> {
+    if bytes.len() < 12 {
+        return Err(Error);
+    }
     let mut reader = Reader::new(&bytes[0..12]);
     let sfnt_version = reader.read_u32()?;
     if ![0x00010000, u32::from_be_bytes(*b"true")].contains(&sfnt_version) {
@@ -526,11 +529,17 @@ pub fn parse_ttf(bytes: &[u8]) -> Result<TTFFont> {
     let mut loca_table_bytes = None;
     let mut maxp_table_bytes = None;
     for index in 0..table_count {
+        if bytes.len() < 12 + index * 16 + 16 {
+            return Err(Error);
+        }
         let mut reader = Reader::new(&bytes[(12 + index * 16)..][..16]);
         let table_tag = reader.read_u32()?;
         reader.skip(4)?;
         let offset = reader.read_u32()? as usize;
         let length = reader.read_u32()? as usize;
+        if bytes.len() < offset + length {
+            return Err(Error);
+        }
         let table_bytes = &bytes[offset..][..length];
         match &table_tag.to_be_bytes() {
             b"cmap" => cmap_table_bytes = Some(table_bytes),
